@@ -109,10 +109,10 @@ def _rebuild_page_with_metadata(
 
         print(f"[PDF_REBUILD] Drawing {len(elements)} text elements (filtered {len(structure.text_elements) - len(elements)} hidden)")
 
-        # Track previous element's baseline to detect and fix overlaps.
-        # Using factor 1.0 (exact font_size) as min gap to prevent cascade:
-        # with typical 1.4-1.5x line spacing, the cascade dies out in 1-2 elements.
-        prev_rl_y = page_h + 100  # Above page top (no constraint for first element)
+        # Track all placed elements to detect overlaps per-column.
+        # Each entry: (rl_y, x_start, x_end)
+        # Only correct overlap when elements share horizontal space (same column).
+        placed = []
 
         for elem in elements:
             font_name = _map_font_name(elem.font_name)
@@ -121,9 +121,21 @@ def _rebuild_page_with_metadata(
             # Desired position from original fitz coordinates
             desired_rl_y = page_h - elem.y - font_size
 
-            # Enforce minimum spacing: baselines must be at least font_size apart
-            min_allowed_rl_y = prev_rl_y - font_size
-            rl_y = min(desired_rl_y, min_allowed_rl_y)
+            # Estimate horizontal extent of this text
+            text_width = max(len(elem.text) * font_size * 0.5, font_size)
+            x_start = elem.x
+            x_end = elem.x + text_width
+
+            # Check against all placed elements for horizontal overlap
+            rl_y = desired_rl_y
+            for prev_rl_y, prev_x_start, prev_x_end in placed:
+                # Skip if no horizontal overlap (different columns)
+                if x_start >= prev_x_end or x_end <= prev_x_start:
+                    continue
+                # Same column — enforce minimum vertical spacing
+                min_allowed = prev_rl_y - font_size
+                if rl_y > min_allowed:
+                    rl_y = min_allowed
 
             if rl_y != desired_rl_y:
                 print(f"[PDF_REBUILD] Overlap fix: '{elem.text[:30]}' shifted {desired_rl_y:.1f} -> {rl_y:.1f}")
@@ -137,7 +149,7 @@ def _rebuild_page_with_metadata(
             c.setFillColor(Color(*elem.color))
             c.drawString(elem.x, rl_y, elem.text)
 
-            prev_rl_y = rl_y
+            placed.append((rl_y, x_start, x_end))
 
         print(f"[PDF_REBUILD] Completed element-based layout")
         

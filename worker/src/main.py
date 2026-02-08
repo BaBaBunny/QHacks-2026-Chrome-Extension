@@ -50,7 +50,7 @@ _configure_tls_ca_bundle()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import tts, stt
+from .routers import tts, stt, pdf_clean
 
 app = FastAPI(title="ClearScan Worker", version="0.1.0")
 app.add_middleware(
