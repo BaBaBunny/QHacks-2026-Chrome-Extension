@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Build output
+dist/
+server/dist/
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Temp files
+uploads/
+output/
+*.mp3
+*.wav
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
