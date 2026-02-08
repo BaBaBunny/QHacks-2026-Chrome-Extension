@@ -49,7 +49,8 @@ export async function speechToText(
   language?: string,
 ): Promise<string> {
   const formData = new FormData();
-  formData.append("audio", audioBlob, "recording.webm");
+  const fileName = audioBlob.type === "audio/wav" ? "recording.wav" : "recording.webm";
+  formData.append("audio", audioBlob, fileName);
   if (language) formData.append("language", language);
 
   const res = await fetch(`${API_BASE}/stt`, {

@@ -58,7 +58,23 @@ async def synthesize(
     all_audio: list[bytes] = []
 
     for chunk in chunks:
-        audio = await client.tts(setup=setup, text=chunk)
-        all_audio.append(audio)
+        result = await client.tts(setup=setup, text=chunk)
+        # TTSResult attributes: raw_data, pcm, pcm16, sample_rate, output_format, etc.
+        audio_bytes = None
+        
+        # Try common audio field names
+        for attr in ["raw_data", "pcm16", "pcm", "audio"]:
+            if hasattr(result, attr):
+                audio_bytes = getattr(result, attr)
+                if isinstance(audio_bytes, bytes):
+                    break
+        
+        if not audio_bytes:
+            raise ValueError(f"Could not find audio data in TTSResult. Available: {dir(result)}")
+        
+        if isinstance(audio_bytes, bytes):
+            all_audio.append(audio_bytes)
+        else:
+            all_audio.append(bytes(audio_bytes))
 
     return b"".join(all_audio)

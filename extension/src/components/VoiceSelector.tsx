@@ -11,8 +11,7 @@ export function VoiceSelector({
   onVoiceChange,
   language,
 }: Props) {
-  const filtered = VOICES.filter((v) => v.language === language);
-  const options = filtered.length > 0 ? filtered : VOICES;
+  const options = VOICES;
 
   return (
     <select
@@ -22,7 +21,7 @@ export function VoiceSelector({
     >
       {options.map((v) => (
         <option key={v.id} value={v.id}>
-          {v.name} ({v.accent})
+          {v.name} ({v.language.toUpperCase()} - {v.accent})
         </option>
       ))}
     </select>

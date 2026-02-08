@@ -7,6 +7,7 @@ import { ProcessingStatus } from "../components/ProcessingStatus";
 import { TranscriptViewer } from "../components/TranscriptViewer";
 import { AudioPlayer } from "../components/AudioPlayer";
 import * as api from "../lib/api";
+import { VOICES } from "../lib/constants";
 
 type Tab = "clean" | "translate" | "tts" | "stt";
 
@@ -104,7 +105,35 @@ export function SidePanel() {
     setStatus("Transcribing...");
     try {
       const result = await api.speechToText(audioBlob, sourceLang);
-      setTranscript(result);
+      const cleaned = result?.trim();
+      if (!cleaned) {
+        setTranscript("No speech detected.");
+        setStatus("Transcription complete!");
+        return;
+      }
+
+      if (targetLang && targetLang !== sourceLang) {
+        setStatus("Translating...");
+        const translated = await api.translateText(cleaned, sourceLang, targetLang);
+        const finalText = translated || cleaned;
+        setTranscript(finalText);
+        setStatus("Generating audio...");
+        const voiceForLang = VOICES.find((v) => v.language === targetLang);
+        const voiceId = voiceForLang ? voiceForLang.id : selectedVoice;
+        const ttsBlob = await api.textToSpeech(finalText, voiceId, targetLang);
+        if (audioUrl) URL.revokeObjectURL(audioUrl);
+        setAudioUrl(URL.createObjectURL(ttsBlob));
+        setStatus("Transcription complete!");
+        return;
+      }
+
+      setTranscript(cleaned);
+      setStatus("Generating audio...");
+      const voiceForLang = VOICES.find((v) => v.language === sourceLang);
+      const voiceId = voiceForLang ? voiceForLang.id : selectedVoice;
+      const ttsBlob = await api.textToSpeech(cleaned, voiceId, sourceLang);
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      setAudioUrl(URL.createObjectURL(ttsBlob));
       setStatus("Transcription complete!");
     } catch (err: any) {
       setError(err.message);
@@ -189,6 +218,7 @@ export function SidePanel() {
               onRecorded={handleSTT}
               disabled={isProcessing}
             />
+            {audioUrl && <AudioPlayer src={audioUrl} />}
             {transcript && (
               <TranscriptViewer label="Transcript" text={transcript} />
             )}
@@ -207,40 +237,152 @@ function AudioRecorderButton({
   disabled: boolean;
 }) {
   const [recording, setRecording] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const [lastRecordingUrl, setLastRecordingUrl] = useState<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Float32Array[]>([]);
+  const sampleRateRef = useRef<number>(44100);
+
+  const mergeBuffers = (chunks: Float32Array[]) => {
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const result = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return result;
+  };
+
+  const encodeWav = (samples: Float32Array, sampleRate: number) => {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+
+    const writeString = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i += 1) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+      }
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, samples.length * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i += 1) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+
+    return new Blob([view], { type: "audio/wav" });
+  };
+
+  const stopRecording = async () => {
+    setRecording(false);
+
+    if (processorRef.current) processorRef.current.disconnect();
+    if (sourceRef.current) sourceRef.current.disconnect();
+    if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+
+    if (audioContextRef.current) {
+      await audioContextRef.current.close();
+    }
+
+    const samples = mergeBuffers(audioChunksRef.current);
+    audioChunksRef.current = [];
+    if (samples.length === 0) {
+      alert("No audio captured. Check your microphone input and try again.");
+      return;
+    }
+
+    let sum = 0;
+    for (let i = 0; i < samples.length; i += 1) {
+      sum += Math.abs(samples[i]);
+    }
+    const avg = sum / samples.length;
+    const wavBlob = encodeWav(samples, sampleRateRef.current);
+    if (lastRecordingUrl) URL.revokeObjectURL(lastRecordingUrl);
+    setLastRecordingUrl(URL.createObjectURL(wavBlob));
+    if (avg < 0.0002) {
+      alert("Audio is too quiet. Increase mic volume or speak closer and try again.");
+      return;
+    }
+    onRecorded(wavBlob);
+  };
 
   const toggle = async () => {
     if (recording) {
-      mediaRecorderRef.current?.stop();
-      setRecording(false);
+      await stopRecording();
     } else {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      chunksRef.current = [];
-      recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        onRecorded(blob);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setRecording(true);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = stream;
+
+        const audioContext = new AudioContext();
+        audioContextRef.current = audioContext;
+        if (audioContext.state === "suspended") {
+          // Ensure audio processing starts after the user gesture
+          await audioContext.resume();
+        }
+        sampleRateRef.current = audioContext.sampleRate;
+
+        const source = audioContext.createMediaStreamSource(stream);
+        sourceRef.current = source;
+
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
+
+        audioChunksRef.current = [];
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer.getChannelData(0);
+          audioChunksRef.current.push(new Float32Array(input));
+        };
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+        setRecording(true);
+      } catch (err: any) {
+        console.error("[Recorder] Failed to start recording:", err);
+        alert(`Could not access microphone: ${err.message}`);
+      }
     }
   };
 
   return (
-    <button
-      onClick={toggle}
-      disabled={disabled}
-      className={`w-full py-3 rounded-lg font-medium transition cursor-pointer ${
-        recording
-          ? "bg-red-600 text-white hover:bg-red-700"
-          : "bg-gray-200 text-gray-800 hover:bg-gray-300"
-      } disabled:opacity-50`}
-    >
-      {recording ? "Stop Recording" : "Start Recording"}
-    </button>
+    <div className="space-y-2">
+      <button
+        onClick={toggle}
+        disabled={disabled}
+        className={`w-full py-3 rounded-lg font-medium transition cursor-pointer ${
+          recording
+            ? "bg-red-600 text-white hover:bg-red-700"
+            : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+        } disabled:opacity-50`}
+      >
+        {recording ? "Stop Recording" : "Start Recording"}
+      </button>
+      {lastRecordingUrl && (
+        <a
+          href={lastRecordingUrl}
+          download="recording.wav"
+          className="block text-sm text-blue-600 hover:underline"
+        >
+          Download last recording
+        </a>
+      )}
+    </div>
   );
 }

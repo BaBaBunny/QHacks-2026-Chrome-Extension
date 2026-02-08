@@ -30,7 +30,8 @@ ttsRouter.post("/", async (req, res) => {
     }
 
     const audioBuffer = Buffer.from(await workerRes.arrayBuffer());
-    const contentType = format === "wav" ? "audio/wav" : "audio/mpeg";
+    // Return as WAV (MP3 conversion requires ffmpeg which may not be installed)
+    const contentType = "audio/wav";
 
     res.set({ "Content-Type": contentType });
     res.send(audioBuffer);

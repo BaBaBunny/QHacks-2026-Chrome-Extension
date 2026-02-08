@@ -1,9 +1,11 @@
+import io
 import os
 import tempfile
 
 import numpy as np
 import sphn
 import gradium
+from pydub import AudioSegment
 
 
 GRADIUM_API_KEY = os.environ.get("GRADIUM_API_KEY", "")
@@ -12,6 +14,19 @@ GRADIUM_BASE_URL = os.environ.get("GRADIUM_BASE_URL", "https://us.api.gradium.ai
 
 async def transcribe(audio_bytes: bytes, language: str = "en") -> str:
     """Transcribe audio bytes (PCM WAV 24kHz) to text via Gradium STT."""
+    # If audio is not WAV, try converting it with pydub (requires ffmpeg)
+    if not (audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE"):
+        try:
+            audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+            audio = audio.set_frame_rate(24000).set_channels(1).set_sample_width(2)
+            wav_buffer = io.BytesIO()
+            audio.export(wav_buffer, format="wav")
+            audio_bytes = wav_buffer.getvalue()
+        except Exception as e:
+            raise RuntimeError(
+                "Unsupported audio codec. Install ffmpeg or enable server-side WAV conversion."
+            ) from e
+
     # sphn.read expects a file path, so write to a temp file
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(audio_bytes)
