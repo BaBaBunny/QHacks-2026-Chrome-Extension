@@ -1,4 +1,4 @@
-import { VOICES } from "../lib/constants";
+import { LANGUAGES, VOICES } from "../lib/constants";
 
 interface Props {
   selectedVoice: string;
@@ -11,17 +11,18 @@ export function VoiceSelector({
   onVoiceChange,
   language,
 }: Props) {
-  const options = VOICES;
+  void language;
+  const languageNames = new Map(LANGUAGES.map((l) => [l.code, l.name]));
 
   return (
     <select
       value={selectedVoice}
       onChange={(e) => onVoiceChange(e.target.value)}
-      className="w-full p-2 border border-gray-300 rounded-lg text-sm"
+      className="glass-input py-2.5"
     >
-      {options.map((v) => (
+      {VOICES.map((v) => (
         <option key={v.id} value={v.id}>
-          {v.name} ({v.language.toUpperCase()} - {v.accent})
+          {v.name} ({languageNames.get(v.language) ?? v.language} - {v.accent})
         </option>
       ))}
     </select>

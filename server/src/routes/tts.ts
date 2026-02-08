@@ -1,40 +1,51 @@
 import { Router } from "express";
+import { getWorkerEndpointUrls } from "../services/workerProxy.js";
 
 export const ttsRouter = Router();
 
-const WORKER_URL = process.env.WORKER_URL || "http://localhost:3002";
-
 ttsRouter.post("/", async (req, res) => {
   try {
-    const { text, voiceId, language, format } = req.body;
+    const { text, voiceId, voice_id, language, format } = req.body;
 
     if (!text) {
       res.status(400).json({ error: "text is required" });
       return;
     }
 
-    const workerRes = await fetch(`${WORKER_URL}/tts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        voice_id: voiceId || null,
-        language: language || "en",
-        format: format || "mp3",
-      }),
-    });
+    const workerUrls = getWorkerEndpointUrls("/tts");
+    const workerErrors: string[] = [];
 
-    if (!workerRes.ok) {
-      const err = await workerRes.text();
-      throw new Error(`Worker error: ${err}`);
+    for (const workerUrl of workerUrls) {
+      try {
+        const workerRes = await fetch(workerUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            voice_id: voice_id || voiceId || null,
+            language: language || "en",
+            format: format || "mp3",
+          }),
+        });
+
+        if (!workerRes.ok) {
+          const err = await workerRes.text();
+          workerErrors.push(`${workerUrl}: ${err || `HTTP ${workerRes.status}`}`);
+          continue;
+        }
+
+        const audioBuffer = Buffer.from(await workerRes.arrayBuffer());
+        const contentType = workerRes.headers.get("content-type") || "audio/wav";
+
+        res.set({ "Content-Type": contentType });
+        res.send(audioBuffer);
+        return;
+      } catch (error: any) {
+        workerErrors.push(`${workerUrl}: ${error?.message || "fetch failed"}`);
+      }
     }
 
-    const audioBuffer = Buffer.from(await workerRes.arrayBuffer());
-    // Return as WAV (MP3 conversion requires ffmpeg which may not be installed)
-    const contentType = "audio/wav";
-
-    res.set({ "Content-Type": contentType });
-    res.send(audioBuffer);
+    throw new Error(`Unable to reach worker TTS endpoint. Tried: ${workerErrors.join(" | ")}`);
   } catch (error: any) {
     res.status(500).json({ error: error.message || "TTS failed" });
   }

@@ -5,6 +5,21 @@ import gradium
 GRADIUM_API_KEY = os.environ.get("GRADIUM_API_KEY", "")
 GRADIUM_BASE_URL = os.environ.get("GRADIUM_BASE_URL", "https://us.api.gradium.ai/api")
 
+
+def _ensure_ca_bundle() -> None:
+    """Ensure Python has a CA bundle so HTTPS calls verify correctly on local setups."""
+    if os.environ.get("SSL_CERT_FILE"):
+        return
+
+    try:
+        import certifi
+    except Exception:
+        return
+
+    ca_file = certifi.where()
+    os.environ["SSL_CERT_FILE"] = ca_file
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", ca_file)
+
 # Default voice per language
 DEFAULT_VOICES: dict[str, str] = {
     "en": "YTpq7expH9539ERJ",
@@ -41,6 +56,8 @@ async def synthesize(
     language: str = "en",
 ) -> bytes:
     """Convert text to WAV audio bytes via Gradium TTS."""
+    _ensure_ca_bundle()
+
     client = gradium.client.GradiumClient(
         base_url=GRADIUM_BASE_URL,
         api_key=GRADIUM_API_KEY,

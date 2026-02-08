@@ -4,7 +4,10 @@ chrome.sidePanel
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.action === "openSidePanel") {
-    chrome.sidePanel.open({ windowId: message.windowId });
-    sendResponse({ ok: true });
+    chrome.sidePanel
+      .open({ windowId: message.windowId })
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: String(error) }));
+    return true;
   }
 });
