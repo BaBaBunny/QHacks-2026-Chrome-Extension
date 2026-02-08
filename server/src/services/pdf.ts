@@ -30,16 +30,60 @@ export async function cleanPdf(pdfPath: string): Promise<CleanResult> {
   const numPages = pdfDoc.numPages;
   console.log(`[PDF] Document has ${numPages} pages`);
   
-  // Extract text from each page (no canvas rendering!)
+  // Extract text from each page, filtering out off-page items and sorting by position
   const pageTexts: string[] = [];
   for (let i = 1; i <= numPages; i++) {
     const page = await pdfDoc.getPage(i);
+    // page.view gives [x1, y1, x2, y2] in PDF user-space coordinates
+    // This matches the coordinate space of text item transforms
+    const [viewX1, viewY1, viewX2, viewY2] = page.view;
     const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(" ");
+
+    // Filter to only items within the visible page bounds
+    const visibleItems = textContent.items.filter((item: any) => {
+      if (!item.transform || !item.str) return false;
+      const tx = item.transform[4];
+      const ty = item.transform[5];
+      return tx >= viewX1 && tx <= viewX2 && ty >= viewY1 && ty <= viewY2;
+    });
+
+    // Sort by position: top-to-bottom (descending ty), then left-to-right (ascending tx)
+    visibleItems.sort((a: any, b: any) => {
+      const ay = a.transform[5];
+      const by = b.transform[5];
+      // Group items into the same "line" if their y-coords are within 5 units
+      if (Math.abs(ay - by) > 5) return by - ay; // higher y = earlier (top of page)
+      return a.transform[4] - b.transform[4]; // left to right within same line
+    });
+
+    // Group items into lines based on y-proximity, then join
+    const lines: string[] = [];
+    let currentLineY = -Infinity;
+    let currentLine: string[] = [];
+
+    for (const item of visibleItems) {
+      const ty = (item as any).transform[5];
+      const str = (item as any).str;
+      if (!str) continue;
+
+      if (Math.abs(ty - currentLineY) > 5) {
+        // New line
+        if (currentLine.length > 0) {
+          lines.push(currentLine.join(" "));
+        }
+        currentLine = [str];
+        currentLineY = ty;
+      } else {
+        currentLine.push(str);
+      }
+    }
+    if (currentLine.length > 0) {
+      lines.push(currentLine.join(" "));
+    }
+
+    const pageText = lines.join("\n");
     pageTexts.push(pageText);
-    console.log(`[PDF] Page ${i}: extracted ${pageText.length} chars`);
+    console.log(`[PDF] Page ${i}: extracted ${pageText.length} chars (${lines.length} lines)`);
   }
   
   const extractedText = pageTexts.join("\n\n");
