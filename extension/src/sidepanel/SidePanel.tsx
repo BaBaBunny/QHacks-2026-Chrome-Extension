@@ -29,6 +29,16 @@ export function SidePanel() {
     setIsProcessing(true);
     setError("");
     setStatus("Uploading and cleaning PDF...");
+    
+    // Clear previous results when starting a new scan
+    setExtractedText("");
+    setTranslatedText("");
+    setTranscript("");
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      setAudioUrl(null);
+    }
+    
     try {
       const result = await api.cleanPdf(file);
       setExtractedText(result.text);

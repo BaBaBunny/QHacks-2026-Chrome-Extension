@@ -1,9 +1,10 @@
 import { Router, Request, Response } from "express";
 import { uploadPdf } from "../middleware/upload.js";
-import { cleanPdf } from "../services/pdf.js";
 import fs from "fs/promises";
 
 export const cleanRouter = Router();
+
+const WORKER_URL = process.env.WORKER_URL || "http://localhost:3002";
 
 cleanRouter.post("/", (req: Request, res: Response) => {
   uploadPdf(req, res, async (err) => {
@@ -18,14 +19,37 @@ cleanRouter.post("/", (req: Request, res: Response) => {
 
     try {
       console.log(`[CLEAN] Processing PDF: ${req.file.path}`);
-      const result = await cleanPdf(req.file.path);
+      
+      // Read the uploaded PDF file
+      const pdfBuffer = await fs.readFile(req.file.path);
+      
+      // Forward to Python worker as multipart
+      const formData = new FormData();
+      formData.append(
+        "pdf",
+        new Blob([pdfBuffer], { type: "application/pdf" }),
+        req.file.originalname || "document.pdf"
+      );
+
+      console.log(`[CLEAN] Forwarding to worker: ${WORKER_URL}/pdf/clean`);
+      const workerRes = await fetch(`${WORKER_URL}/pdf/clean`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!workerRes.ok) {
+        const errorText = await workerRes.text();
+        throw new Error(`Worker error: ${errorText}`);
+      }
+
+      const result = await workerRes.json();
 
       // Clean up uploaded file
       await fs.unlink(req.file.path).catch(() => {});
 
       res.json({
-        pdf: result.pdfBuffer.toString("base64"),
-        text: result.extractedText,
+        pdf: result.pdf,
+        text: result.text,
         pageCount: result.pageCount,
       });
     } catch (error: any) {
