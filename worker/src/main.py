@@ -63,6 +63,7 @@ app.add_middleware(
 
 app.include_router(tts.router, prefix="/tts", tags=["tts"])
 app.include_router(stt.router, prefix="/stt", tags=["stt"])
+app.include_router(pdf_clean.router, prefix="/pdf", tags=["pdf"])
 
 
 @app.get("/health")

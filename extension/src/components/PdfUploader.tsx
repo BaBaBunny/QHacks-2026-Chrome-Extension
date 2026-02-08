@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 interface Props {
   onUpload: (file: File) => void;
@@ -6,10 +6,18 @@ interface Props {
 }
 
 export function PdfUploader({ onUpload, disabled }: Props) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (file) onUpload(file);
+      if (file) {
+        onUpload(file);
+        // Reset the input so the same file can be selected again
+        if (inputRef.current) {
+          inputRef.current.value = "";
+        }
+      }
     },
     [onUpload],
   );
@@ -23,6 +31,7 @@ export function PdfUploader({ onUpload, disabled }: Props) {
       }`}
     >
       <input
+        ref={inputRef}
         type="file"
         accept=".pdf"
         onChange={handleChange}
