@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { uploadAudio } from "../middleware/upload.js";
-import { execSync, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
 import fs from "fs/promises";
+import { getWorkerEndpointUrls } from "../services/workerProxy.js";
+import { translateText } from "../services/gemini.js";
 
 export const sttRouter = Router();
-
-const WORKER_URL = process.env.WORKER_URL || "http://localhost:3002";
 
 // Check if ffmpeg is available
 function checkFfmpeg(): boolean {
@@ -19,6 +19,18 @@ function checkFfmpeg(): boolean {
 
 const HAS_FFMPEG = checkFfmpeg();
 
+function parseWorkerErrorPayload(payloadText: string): string {
+  const trimmed = payloadText.trim();
+  if (!trimmed) return "Worker request failed";
+  try {
+    const parsed = JSON.parse(trimmed);
+    const message = parsed?.detail || parsed?.error || parsed?.message;
+    return typeof message === "string" && message.trim() ? message.trim() : trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 sttRouter.post("/", (req, res) => {
   uploadAudio(req, res, async (err) => {
     if (err) {
@@ -29,25 +41,57 @@ sttRouter.post("/", (req, res) => {
       res.status(400).json({ error: "No audio file uploaded" });
       return;
     }
+    if (req.file.size === 0) {
+      await fs.unlink(req.file.path).catch(() => {});
+      res.status(400).json({ error: "Uploaded audio is empty. Record at least 1 second and try again." });
+      return;
+    }
 
-    const language = (req.body?.language as string) || "en";
+    const sourceLang = (req.body?.sourceLang as string) || (req.body?.language as string) || "en";
+    const targetLang = (req.body?.targetLang as string) || sourceLang;
 
     try {
-      let wavBuffer: Buffer;
+      const rawAudio = await fs.readFile(req.file.path);
+      if (rawAudio.length < 256) {
+        throw new Error("Recorded audio is too short or invalid. Please record for at least 1 second.");
+      }
+      let wavBuffer = rawAudio;
 
       if (HAS_FFMPEG) {
-        // Convert to PCM WAV 24kHz mono using ffmpeg
-        const wavPath = req.file.path + ".wav";
-        execSync(
-          `ffmpeg -y -i "${req.file.path}" -ar 24000 -ac 1 -f wav "${wavPath}"`,
-          { stdio: "pipe" },
+        // Convert from bytes via stdin so ffmpeg probes true content, not filename extension.
+        const ffmpeg = spawnSync(
+          "ffmpeg",
+          [
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            "pipe:0",
+            "-af",
+            "highpass=f=80,lowpass=f=7600,dynaudnorm=f=150:g=15",
+            "-ar",
+            "24000",
+            "-ac",
+            "1",
+            "-f",
+            "wav",
+            "pipe:1",
+          ],
+          {
+            input: rawAudio,
+            maxBuffer: 50 * 1024 * 1024,
+          },
         );
-        wavBuffer = await fs.readFile(wavPath);
-        await fs.unlink(wavPath).catch(() => {});
+
+        if (ffmpeg.status !== 0 || !ffmpeg.stdout || ffmpeg.stdout.length === 0) {
+          const stderr = ffmpeg.stderr?.toString("utf8").trim() || "Unknown ffmpeg error";
+          throw new Error(`Audio conversion failed: ${stderr}`);
+        }
+
+        wavBuffer = Buffer.from(ffmpeg.stdout);
       } else {
-        // No ffmpeg: let worker attempt conversion (requires ffmpeg on worker)
-        console.warn("[STT] ffmpeg not found, sending original audio");
-        wavBuffer = await fs.readFile(req.file.path);
+        // No ffmpeg on server: let worker attempt conversion.
+        console.warn("[STT] ffmpeg not found on server, forwarding original audio");
       }
 
       // Forward to Python worker as multipart
@@ -55,27 +99,84 @@ sttRouter.post("/", (req, res) => {
       const mimeType = HAS_FFMPEG ? "audio/wav" : req.file.mimetype || "application/octet-stream";
       const fileName = HAS_FFMPEG ? "audio.wav" : req.file.originalname || "audio.bin";
       formData.append("audio", new Blob([wavBuffer], { type: mimeType }), fileName);
-      formData.append("language", language);
+      formData.append("language", sourceLang);
 
-      const workerRes = await fetch(`${WORKER_URL}/stt`, {
-        method: "POST",
-        body: formData,
-      });
+      const workerUrls = getWorkerEndpointUrls("/stt");
+      const workerErrors: string[] = [];
+      let result: any = null;
 
-      if (!workerRes.ok) {
-        throw new Error(`Worker error: ${await workerRes.text()}`);
+      for (const workerUrl of workerUrls) {
+        try {
+          const workerRes = await fetch(workerUrl, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!workerRes.ok) {
+            const workerMessage = parseWorkerErrorPayload(await workerRes.text());
+            if (workerRes.status >= 400 && workerRes.status < 500 && workerRes.status !== 404) {
+              throw new Error(workerMessage);
+            }
+            workerErrors.push(`${workerUrl}: ${workerMessage} (${workerRes.status})`);
+            continue;
+          }
+
+          result = await workerRes.json();
+          break;
+        } catch (error: any) {
+          workerErrors.push(`${workerUrl}: ${error?.message || "fetch failed"}`);
+        }
       }
 
-      const result = await workerRes.json();
+      if (!result) {
+        throw new Error(`Unable to reach worker STT endpoint. Tried: ${workerErrors.join(" | ")}`);
+      }
 
       // Clean up temp files
       await fs.unlink(req.file.path).catch(() => {});
 
-      res.json(result);
+      const transcript = String(result?.transcript || "").trim();
+      if (!transcript) {
+        res.json({
+          transcript: "",
+          translated: "",
+          sourceLang,
+          targetLang,
+        });
+        return;
+      }
+
+      if (targetLang !== sourceLang) {
+        try {
+          const translated = await translateText(transcript, sourceLang, targetLang);
+          res.json({
+            transcript,
+            translated: translated.trim(),
+            sourceLang,
+            targetLang,
+          });
+          return;
+        } catch (translationError) {
+          console.warn("[STT] translation failed, returning transcript", translationError);
+        }
+      }
+
+      res.json({
+        transcript,
+        translated: transcript,
+        sourceLang,
+        targetLang,
+      });
     } catch (error: any) {
       // Clean up on error
       if (req.file) await fs.unlink(req.file.path).catch(() => {});
-      res.status(500).json({ error: error.message || "STT failed" });
+      const message = error?.message || "STT failed";
+      const isClientInputError =
+        message.includes("too short") ||
+        message.includes("empty") ||
+        message.includes("invalid") ||
+        message.includes("Unsupported audio codec");
+      res.status(isClientInputError ? 400 : 500).json({ error: message });
     }
   });
 });

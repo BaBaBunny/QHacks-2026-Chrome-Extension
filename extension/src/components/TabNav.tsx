@@ -4,7 +4,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "clean", label: "Clean PDF" },
   { id: "translate", label: "Translate" },
   { id: "tts", label: "Listen" },
-  { id: "stt", label: "Dictate" },
+  { id: "stt", label: "Transcribe" },
 ];
 
 interface Props {
@@ -14,18 +14,18 @@ interface Props {
 
 export function TabNav({ activeTab, onTabChange }: Props) {
   return (
-    <nav className="flex border-b border-gray-200 bg-white">
+    <nav className="mx-5 mt-1 glass-card grid grid-cols-4 gap-1 rounded-2xl border-white/55 px-1 py-1">
       {TABS.map((tab) => (
         <button
           key={tab.id}
           onClick={() => onTabChange(tab.id)}
-          className={`flex-1 py-2.5 text-sm font-medium text-center border-b-2 transition cursor-pointer ${
+          className={`min-w-0 w-full overflow-hidden rounded-xl px-1.5 py-2.5 text-[clamp(0.72rem,1.7vw,0.95rem)] leading-tight font-semibold tracking-[-0.01em] text-center transition-all cursor-pointer ${
             activeTab === tab.id
-              ? "border-blue-600 text-blue-600"
-              : "border-transparent text-gray-500 hover:text-gray-700"
+              ? "glass-strong border border-white/70 text-slate-900 shadow-[0_10px_24px_rgba(15,23,42,0.12)]"
+              : "text-slate-600 hover:text-slate-900 hover:bg-white/45"
           }`}
         >
-          {tab.label}
+          <span className="block truncate whitespace-nowrap">{tab.label}</span>
         </button>
       ))}
     </nav>

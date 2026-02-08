@@ -14,11 +14,11 @@ export function LanguageSelector({
   onTargetChange,
 }: Props) {
   return (
-    <div className="flex gap-2 items-center">
+    <div className="glass-card flex items-center gap-2.5 rounded-2xl border-white/65 p-2.5">
       <select
         value={sourceLang}
         onChange={(e) => onSourceChange(e.target.value)}
-        className="flex-1 p-2 border border-gray-300 rounded-lg text-sm"
+        className="glass-input flex-1"
       >
         {LANGUAGES.map((l) => (
           <option key={l.code} value={l.code}>
@@ -26,11 +26,11 @@ export function LanguageSelector({
           </option>
         ))}
       </select>
-      <span className="text-gray-400 text-sm">&rarr;</span>
+      <span className="px-1 text-slate-500 text-base">-&gt;</span>
       <select
         value={targetLang}
         onChange={(e) => onTargetChange(e.target.value)}
-        className="flex-1 p-2 border border-gray-300 rounded-lg text-sm"
+        className="glass-input flex-1"
       >
         {LANGUAGES.map((l) => (
           <option key={l.code} value={l.code}>

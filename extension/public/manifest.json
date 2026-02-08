@@ -3,8 +3,8 @@
   "name": "ClearScan",
   "version": "0.1.0",
   "description": "Clean scanned PDFs, translate text, TTS & STT",
-  "permissions": ["sidePanel", "activeTab", "storage"],
-  "host_permissions": ["http://localhost:3001/*"],
+  "permissions": ["sidePanel", "activeTab", "storage", "audioCapture"],
+  "host_permissions": ["http://localhost:3001/*", "http://localhost:3002/*"],
   "action": {
     "default_popup": "src/popup/index.html",
     "default_icon": {

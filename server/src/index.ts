@@ -13,6 +13,7 @@ import { translateRouter } from "./routes/translate.js";
 import { ttsRouter } from "./routes/tts.js";
 import { sttRouter } from "./routes/stt.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { ensureWorkerRunning } from "./services/workerRuntime.js";
 
 const uploadsDir = resolve(__dirname, "../uploads");
 if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
@@ -27,6 +28,10 @@ app.use("/api/clean", cleanRouter);
 app.use("/api/translate", translateRouter);
 app.use("/api/tts", ttsRouter);
 app.use("/api/stt", sttRouter);
+app.use("/clean", cleanRouter);
+app.use("/translate", translateRouter);
+app.use("/tts", ttsRouter);
+app.use("/stt", sttRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
@@ -37,3 +42,5 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`ClearScan server running on http://localhost:${PORT}`);
 });
+
+void ensureWorkerRunning(resolve(__dirname, "../../"));

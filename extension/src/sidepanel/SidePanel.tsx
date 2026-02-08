@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TabNav } from "../components/TabNav";
 import { PdfUploader } from "../components/PdfUploader";
 import { LanguageSelector } from "../components/LanguageSelector";
@@ -7,7 +7,6 @@ import { ProcessingStatus } from "../components/ProcessingStatus";
 import { TranscriptViewer } from "../components/TranscriptViewer";
 import { AudioPlayer } from "../components/AudioPlayer";
 import * as api from "../lib/api";
-import { VOICES } from "../lib/constants";
 
 type Tab = "clean" | "translate" | "tts" | "stt";
 
@@ -25,6 +24,8 @@ export function SidePanel() {
   const [sourceLang, setSourceLang] = useState("en");
   const [targetLang, setTargetLang] = useState("fr");
   const [selectedVoice, setSelectedVoice] = useState("YTpq7expH9539ERJ");
+  const [isDownloadingTranslationPdf, setIsDownloadingTranslationPdf] = useState(false);
+  const [isDownloadingTranscriptPdf, setIsDownloadingTranscriptPdf] = useState(false);
 
   const handleClean = async (file: File) => {
     setIsProcessing(true);
@@ -109,61 +110,69 @@ export function SidePanel() {
     }
   };
 
-  const handleTTSForTranslation = async () => {
+  const handleDownloadTranslationPdf = async () => {
     if (!translatedText) return;
-    setIsProcessing(true);
+
+    setIsDownloadingTranslationPdf(true);
     setError("");
-    setStatus("Generating audio...");
+    setStatus("Preparing translated PDF...");
     try {
-      const voiceId = selectedVoice || VOICES.find((v) => v.language === targetLang)?.id;
-      const blob = await api.textToSpeech(translatedText, voiceId, targetLang);
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-      setAudioUrl(URL.createObjectURL(blob));
-      setStatus("Audio ready!");
+      const pdfBlob = await api.translatedTextToPdf(translatedText, targetLang);
+      const url = URL.createObjectURL(pdfBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `translated-${targetLang || "text"}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus("Translated PDF downloaded!");
     } catch (err: any) {
       setError(err.message);
       setStatus("");
     } finally {
-      setIsProcessing(false);
+      setIsDownloadingTranslationPdf(false);
+    }
+  };
+
+  const handleDownloadTranscriptPdf = async () => {
+    if (!transcript) return;
+
+    setIsDownloadingTranscriptPdf(true);
+    setError("");
+    setStatus("Preparing transcript PDF...");
+    try {
+      const pdfBlob = await api.translatedTextToPdf(transcript, sourceLang || "text");
+      const url = URL.createObjectURL(pdfBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `transcript-${sourceLang || "text"}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatus("Transcript PDF downloaded!");
+    } catch (err: any) {
+      setError(err.message);
+      setStatus("");
+    } finally {
+      setIsDownloadingTranscriptPdf(false);
     }
   };
 
   const handleSTT = async (audioBlob: Blob) => {
     setIsProcessing(true);
     setError("");
-    setStatus("Transcribing...");
+    setStatus(
+      sourceLang === targetLang ? "Transcribing..." : "Transcribing and translating...",
+    );
     try {
-      const result = await api.speechToText(audioBlob, sourceLang);
-      const cleaned = result?.trim();
-      if (!cleaned) {
-        setTranscript("No speech detected.");
-        setStatus("Transcription complete!");
-        return;
-      }
-
-      if (targetLang && targetLang !== sourceLang) {
-        setStatus("Translating...");
-        const translated = await api.translateText(cleaned, sourceLang, targetLang);
-        const finalText = translated || cleaned;
-        setTranscript(finalText);
-        setStatus("Generating audio...");
-        const voiceForLang = VOICES.find((v) => v.language === targetLang);
-        const voiceId = voiceForLang ? voiceForLang.id : selectedVoice;
-        const ttsBlob = await api.textToSpeech(finalText, voiceId, targetLang);
-        if (audioUrl) URL.revokeObjectURL(audioUrl);
-        setAudioUrl(URL.createObjectURL(ttsBlob));
-        setStatus("Transcription complete!");
-        return;
-      }
-
-      setTranscript(cleaned);
-      setStatus("Generating audio...");
-      const voiceForLang = VOICES.find((v) => v.language === sourceLang);
-      const voiceId = voiceForLang ? voiceForLang.id : selectedVoice;
-      const ttsBlob = await api.textToSpeech(cleaned, voiceId, sourceLang);
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-      setAudioUrl(URL.createObjectURL(ttsBlob));
-      setStatus("Transcription complete!");
+      const result = await api.speechToText(audioBlob, sourceLang, targetLang);
+      const finalText =
+        sourceLang === targetLang ? result.transcript : (result.translated || result.transcript);
+      const cleaned = finalText?.trim();
+      setTranscript(cleaned || "No speech detected.");
+      setStatus(
+        sourceLang === targetLang
+          ? "Transcription complete!"
+          : "Transcription and translation complete!",
+      );
     } catch (err: any) {
       setError(err.message);
       setStatus("");
@@ -173,101 +182,171 @@ export function SidePanel() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
-      <header className="bg-blue-600 text-white p-3">
-        <h1 className="text-lg font-bold">ClearScan</h1>
-      </header>
+    <div className="relative min-h-screen overflow-hidden text-slate-800">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-20 -left-24 h-72 w-72 rounded-full bg-sky-200/40 blur-3xl" />
+        <div className="absolute -bottom-24 -right-32 h-80 w-80 rounded-full bg-indigo-200/35 blur-[100px]" />
+        <div className="absolute top-32 right-1/3 h-64 w-64 rounded-full bg-cyan-200/30 blur-[90px]" />
+      </div>
 
-      <TabNav activeTab={activeTab} onTabChange={setActiveTab} />
+      <div className="relative z-10 flex min-h-screen flex-col">
+        <header className="flex items-center justify-between px-5 pt-6 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="glass-strong h-11 w-11 overflow-hidden rounded-2xl border border-white/80 shadow-lg shadow-slate-300/40">
+              <img
+                src="/icons/icon48.png"
+                alt="ClearScan icon"
+                className="h-full w-full object-cover"
+              />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold leading-tight text-slate-900">
+                ClearScan
+              </h1>
+            </div>
+          </div>
+        </header>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <ProcessingStatus
-          status={status}
-          error={error}
-          isProcessing={isProcessing}
+        <TabNav
+          activeTab={activeTab}
+          onTabChange={(tab) => {
+            setActiveTab(tab);
+            setStatus("");
+            setError("");
+          }}
         />
 
-        {activeTab === "clean" && (
-          <>
-            <PdfUploader onUpload={handleClean} disabled={isProcessing} />
-            {extractedText && (
-              <TranscriptViewer label="Extracted Text" text={extractedText} />
-            )}
-          </>
-        )}
+        <main className="flex-1 space-y-5 overflow-y-auto px-5 pt-4 pb-7">
+          <ProcessingStatus
+            status={status}
+            error={error}
+            isProcessing={isProcessing}
+          />
 
-        {activeTab === "translate" && (
-          <>
-            <LanguageSelector
-              sourceLang={sourceLang}
-              targetLang={targetLang}
-              onSourceChange={setSourceLang}
-              onTargetChange={setTargetLang}
-            />
-            <button
-              onClick={handleTranslate}
-              disabled={isProcessing || (!extractedText && !translatedText)}
-              className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition cursor-pointer"
-            >
-              Translate
-            </button>
-            {translatedText && (
-              <>
-                <TranscriptViewer label="Translated Text" text={translatedText} />
-                <VoiceSelector
-                  selectedVoice={selectedVoice}
-                  onVoiceChange={setSelectedVoice}
-                  language={targetLang}
+          {activeTab === "clean" && (
+            <div className="glass-card space-y-5 rounded-3xl border-white/60 p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1.5">
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    Clean your scan
+                  </h3>
+                  <p className="text-sm text-slate-600">
+                    Drop your PDF to denoise, de-skew, and prep text for
+                    translation or audio.
+                  </p>
+                </div>
+              </div>
+              <PdfUploader onUpload={handleClean} disabled={isProcessing} />
+              {extractedText && (
+                <TranscriptViewer label="Extracted Text" text={extractedText} />
+              )}
+            </div>
+          )}
+
+          {activeTab === "translate" && (
+            <div className="glass-card space-y-5 rounded-3xl border-white/60 p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1.5">
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    Translate instantly
+                  </h3>
+                  <p className="text-sm text-slate-600">
+                    Preserve context while switching languages. Pick a source and
+                    target, then translate in one tap.
+                  </p>
+                </div>
+              </div>
+              <LanguageSelector
+                sourceLang={sourceLang}
+                targetLang={targetLang}
+                onSourceChange={setSourceLang}
+                onTargetChange={setTargetLang}
+              />
+              <button
+                onClick={handleTranslate}
+                disabled={isProcessing || (!extractedText && !translatedText)}
+                className="btn-primary w-full py-3"
+              >
+                Translate
+              </button>
+              {translatedText && (
+                <TranscriptViewer
+                  label="Translated Text"
+                  text={translatedText}
+                  onDownload={handleDownloadTranslationPdf}
+                  downloading={isDownloadingTranslationPdf}
                 />
-                <button
-                  onClick={handleTTSForTranslation}
-                  disabled={isProcessing || !translatedText}
-                  className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition cursor-pointer"
-                >
-                  Generate Audio
-                </button>
-                {audioUrl && <AudioPlayer src={audioUrl} />}
-              </>
-            )}
-          </>
-        )}
+              )}
+            </div>
+          )}
 
-        {activeTab === "tts" && (
-          <>
-            <VoiceSelector
-              selectedVoice={selectedVoice}
-              onVoiceChange={setSelectedVoice}
-              language={targetLang}
-            />
-            <button
-              onClick={handleTTS}
-              disabled={isProcessing || (!extractedText && !translatedText)}
-              className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition cursor-pointer"
-            >
-              Generate Audio
-            </button>
-            {audioUrl && <AudioPlayer src={audioUrl} />}
-          </>
-        )}
+          {activeTab === "tts" && (
+            <div className="glass-card space-y-5 rounded-3xl border-white/60 p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1.5">
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    Listen with natural voices
+                  </h3>
+                  <p className="text-sm text-slate-600">
+                    Choose a voice and generate audio for the current text.
+                  </p>
+                </div>
+              </div>
+              <VoiceSelector
+                selectedVoice={selectedVoice}
+                onVoiceChange={setSelectedVoice}
+                language={targetLang}
+              />
+              <button
+                onClick={handleTTS}
+                disabled={isProcessing || (!extractedText && !translatedText)}
+                className="btn-primary w-full py-3"
+              >
+                Generate Audio
+              </button>
+              {audioUrl && <AudioPlayer src={audioUrl} />}
+            </div>
+          )}
 
-        {activeTab === "stt" && (
-          <>
-            <LanguageSelector
-              sourceLang={sourceLang}
-              targetLang={targetLang}
-              onSourceChange={setSourceLang}
-              onTargetChange={setTargetLang}
-            />
-            <AudioRecorderButton
-              onRecorded={handleSTT}
-              disabled={isProcessing}
-            />
-            {audioUrl && <AudioPlayer src={audioUrl} />}
-            {transcript && (
-              <TranscriptViewer label="Transcript" text={transcript} />
-            )}
-          </>
-        )}
+          {activeTab === "stt" && (
+            <div className="glass-card space-y-5 rounded-3xl border-white/60 p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1.5">
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    Dictate back to text
+                  </h3>
+                  <p className="text-sm text-slate-600">
+                    Record audio in your chosen source language and get a clean
+                    transcript.
+                  </p>
+                </div>
+              </div>
+              <LanguageSelector
+                sourceLang={sourceLang}
+                targetLang={targetLang}
+                onSourceChange={setSourceLang}
+                onTargetChange={setTargetLang}
+              />
+              <AudioRecorderButton
+                onRecorded={handleSTT}
+                onError={(message) => {
+                  setError(message);
+                  setStatus("");
+                }}
+                disabled={isProcessing}
+              />
+              {transcript && (
+                <TranscriptViewer
+                  label="Extracted Text"
+                  text={transcript}
+                  variant="extracted"
+                  onDownload={handleDownloadTranscriptPdf}
+                  downloading={isDownloadingTranscriptPdf}
+                />
+              )}
+            </div>
+          )}
+        </main>
       </div>
     </div>
   );
@@ -275,133 +354,147 @@ export function SidePanel() {
 
 function AudioRecorderButton({
   onRecorded,
+  onError,
   disabled,
 }: {
   onRecorded: (blob: Blob) => void;
+  onError: (message: string) => void;
   disabled: boolean;
 }) {
   const [recording, setRecording] = useState(false);
-  const [lastRecordingUrl, setLastRecordingUrl] = useState<string | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const [micPermission, setMicPermission] = useState<PermissionState | "unknown">(
+    "unknown",
+  );
+  const [requestingPermission, setRequestingPermission] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Float32Array[]>([]);
-  const sampleRateRef = useRef<number>(44100);
+  const chunksRef = useRef<Blob[]>([]);
+  const recordingStartedAtRef = useRef<number>(0);
 
-  const mergeBuffers = (chunks: Float32Array[]) => {
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const result = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return result;
-  };
+  useEffect(() => {
+    let mounted = true;
+    let permissionStatus: PermissionStatus | null = null;
 
-  const encodeWav = (samples: Float32Array, sampleRate: number) => {
-    const buffer = new ArrayBuffer(44 + samples.length * 2);
-    const view = new DataView(buffer);
-
-    const writeString = (offset: number, str: string) => {
-      for (let i = 0; i < str.length; i += 1) {
-        view.setUint8(offset + i, str.charCodeAt(i));
+    const hydratePermission = async () => {
+      try {
+        if (!navigator.permissions?.query) return;
+        permissionStatus = await navigator.permissions.query({
+          name: "microphone" as PermissionName,
+        });
+        if (!mounted) return;
+        setMicPermission(permissionStatus.state);
+        permissionStatus.onchange = () => {
+          if (mounted) setMicPermission(permissionStatus?.state || "unknown");
+        };
+      } catch {
+        setMicPermission("unknown");
       }
     };
 
-    writeString(0, "RIFF");
-    view.setUint32(4, 36 + samples.length * 2, true);
-    writeString(8, "WAVE");
-    writeString(12, "fmt ");
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    writeString(36, "data");
-    view.setUint32(40, samples.length * 2, true);
+    void hydratePermission();
 
-    let offset = 44;
-    for (let i = 0; i < samples.length; i += 1) {
-      const s = Math.max(-1, Math.min(1, samples[i]));
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      offset += 2;
+    return () => {
+      mounted = false;
+      if (permissionStatus) permissionStatus.onchange = null;
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    };
+  }, []);
+
+  const requestMicrophoneAccess = async () => {
+    setRequestingPermission(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      setMicPermission("granted");
+      return stream;
+    } catch (err: any) {
+      if (err?.name === "NotAllowedError") setMicPermission("denied");
+      throw err;
+    } finally {
+      setRequestingPermission(false);
     }
-
-    return new Blob([view], { type: "audio/wav" });
-  };
-
-  const stopRecording = async () => {
-    setRecording(false);
-
-    if (processorRef.current) processorRef.current.disconnect();
-    if (sourceRef.current) sourceRef.current.disconnect();
-    if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
-
-    if (audioContextRef.current) {
-      await audioContextRef.current.close();
-    }
-
-    const samples = mergeBuffers(audioChunksRef.current);
-    audioChunksRef.current = [];
-    if (samples.length === 0) {
-      alert("No audio captured. Check your microphone input and try again.");
-      return;
-    }
-
-    let sum = 0;
-    for (let i = 0; i < samples.length; i += 1) {
-      sum += Math.abs(samples[i]);
-    }
-    const avg = sum / samples.length;
-    const wavBlob = encodeWav(samples, sampleRateRef.current);
-    if (lastRecordingUrl) URL.revokeObjectURL(lastRecordingUrl);
-    setLastRecordingUrl(URL.createObjectURL(wavBlob));
-    if (avg < 0.0002) {
-      alert("Audio is too quiet. Increase mic volume or speak closer and try again.");
-      return;
-    }
-    onRecorded(wavBlob);
   };
 
   const toggle = async () => {
-    if (recording) {
-      await stopRecording();
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        streamRef.current = stream;
-
-        const audioContext = new AudioContext();
-        audioContextRef.current = audioContext;
-        if (audioContext.state === "suspended") {
-          // Ensure audio processing starts after the user gesture
-          await audioContext.resume();
-        }
-        sampleRateRef.current = audioContext.sampleRate;
-
-        const source = audioContext.createMediaStreamSource(stream);
-        sourceRef.current = source;
-
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-        processorRef.current = processor;
-
-        audioChunksRef.current = [];
-        processor.onaudioprocess = (event) => {
-          const input = event.inputBuffer.getChannelData(0);
-          audioChunksRef.current.push(new Float32Array(input));
-        };
-
-        source.connect(processor);
-        processor.connect(audioContext.destination);
-        setRecording(true);
-      } catch (err: any) {
-        console.error("[Recorder] Failed to start recording:", err);
-        alert(`Could not access microphone: ${err.message}`);
+    try {
+      onError("");
+      if (recording) {
+        mediaRecorderRef.current?.requestData();
+        mediaRecorderRef.current?.stop();
+        setRecording(false);
+        return;
       }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Microphone recording is not supported in this browser context.");
+      }
+      if (typeof MediaRecorder === "undefined") {
+        throw new Error("Media recording is not supported in this browser.");
+      }
+
+      const stream = await requestMicrophoneAccess();
+      streamRef.current = stream;
+
+      const preferredMimeTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ];
+      const mimeType = preferredMimeTypes.find((type) =>
+        MediaRecorder.isTypeSupported(type),
+      );
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onerror = () => {
+        onError("Recorder failed while capturing audio. Please try again.");
+      };
+      recorder.onstop = () => {
+        const elapsedMs = Math.max(0, Date.now() - recordingStartedAtRef.current);
+        recordingStartedAtRef.current = 0;
+        if (chunksRef.current.length > 0) {
+          const outputType = mimeType || "audio/webm";
+          const blob = new Blob(chunksRef.current, { type: outputType });
+          if (elapsedMs < 1000 || blob.size < 1024) {
+            onError("Recorded audio is too short. Please record for at least 1 second.");
+          } else {
+            onRecorded(blob);
+          }
+        } else {
+          onError("No audio captured. Please try recording again.");
+        }
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        mediaRecorderRef.current = null;
+      };
+
+      recordingStartedAtRef.current = Date.now();
+      recorder.start(250);
+      mediaRecorderRef.current = recorder;
+      setRecording(true);
+    } catch (err: any) {
+      const message =
+        err?.name === "NotAllowedError"
+          ? "Microphone access is blocked. In Chrome, open extension site settings and set Microphone to Allow."
+          : err?.message || "Unable to start recording.";
+      onError(message);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      mediaRecorderRef.current = null;
+      recordingStartedAtRef.current = 0;
+      setRecording(false);
     }
   };
 
@@ -409,23 +502,33 @@ function AudioRecorderButton({
     <div className="space-y-2">
       <button
         onClick={toggle}
-        disabled={disabled}
-        className={`w-full py-3 rounded-lg font-medium transition cursor-pointer ${
+        disabled={disabled || requestingPermission}
+        className={`w-full rounded-2xl px-4 py-3 font-semibold transition-all ${
           recording
-            ? "bg-red-600 text-white hover:bg-red-700"
-            : "bg-gray-200 text-gray-800 hover:bg-gray-300"
-        } disabled:opacity-50`}
+            ? "glass-strong border border-rose-200/80 bg-rose-50/75 text-rose-700 shadow-[0_12px_26px_rgba(244,63,94,0.15)]"
+            : "glass-card border-white/65 text-slate-800 hover:border-slate-300/80 shadow-[0_12px_26px_rgba(15,23,42,0.12)]"
+        } disabled:cursor-not-allowed disabled:opacity-50`}
       >
-        {recording ? "Stop Recording" : "Start Recording"}
+        <span className="inline-flex items-center gap-2">
+          <span
+            className={`h-2.5 w-2.5 rounded-full ${
+              recording ? "bg-rose-500 animate-pulse" : "bg-slate-400"
+            }`}
+          />
+          {recording
+            ? "Stop recording"
+            : requestingPermission
+              ? "Requesting microphone access..."
+              : micPermission === "granted"
+                ? "Start recording"
+                : "Enable microphone access"}
+        </span>
       </button>
-      {lastRecordingUrl && (
-        <a
-          href={lastRecordingUrl}
-          download="recording.wav"
-          className="block text-sm text-blue-600 hover:underline"
-        >
-          Download last recording
-        </a>
+      {micPermission === "denied" && (
+        <p className="text-xs text-rose-600">
+          Microphone access is blocked for this extension. Allow it in Chrome site
+          settings, then reload the extension.
+        </p>
       )}
     </div>
   );
