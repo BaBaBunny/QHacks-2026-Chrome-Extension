@@ -99,6 +99,25 @@ export function SidePanel() {
     }
   };
 
+  const handleTTSForTranslation = async () => {
+    if (!translatedText) return;
+    setIsProcessing(true);
+    setError("");
+    setStatus("Generating audio...");
+    try {
+      const voiceId = selectedVoice || VOICES.find((v) => v.language === targetLang)?.id;
+      const blob = await api.textToSpeech(translatedText, voiceId, targetLang);
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      setAudioUrl(URL.createObjectURL(blob));
+      setStatus("Audio ready!");
+    } catch (err: any) {
+      setError(err.message);
+      setStatus("");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleSTT = async (audioBlob: Blob) => {
     setIsProcessing(true);
     setError("");
@@ -183,7 +202,22 @@ export function SidePanel() {
               Translate
             </button>
             {translatedText && (
-              <TranscriptViewer label="Translated Text" text={translatedText} />
+              <>
+                <TranscriptViewer label="Translated Text" text={translatedText} />
+                <VoiceSelector
+                  selectedVoice={selectedVoice}
+                  onVoiceChange={setSelectedVoice}
+                  language={targetLang}
+                />
+                <button
+                  onClick={handleTTSForTranslation}
+                  disabled={isProcessing || !translatedText}
+                  className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition cursor-pointer"
+                >
+                  Generate Audio
+                </button>
+                {audioUrl && <AudioPlayer src={audioUrl} />}
+              </>
             )}
           </>
         )}
