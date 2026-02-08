@@ -3,7 +3,6 @@ PDF structure extraction service using PyMuPDF (fitz).
 Extracts detailed layout information including text positions, fonts, sizes, and colors.
 """
 from typing import Dict, List, Any
-from pypdf import PdfReader
 import logging
 import fitz  # PyMuPDF
 import os
@@ -84,51 +83,73 @@ def _extract_text_with_fitz(fitz_page) -> List[TextElement]:
     """
     Extract text elements using PyMuPDF (fitz) which provides correct
     per-line Y positions, accurate font sizes, and font names.
-    
+
+    Filters out text that is positioned outside the visible page bounds
+    (off-page text used as a PDF obfuscation technique).
+
     All Y coordinates are top-down (distance from page top).
     """
     text_elements = []
-    
+
+    # Get page bounds for filtering off-page text
+    page_rect = fitz_page.rect  # visible page rectangle
+    page_w = page_rect.width
+    page_h = page_rect.height
+
     try:
         text_dict = fitz_page.get_text("dict")
-        
+
         for block in text_dict.get("blocks", []):
             if block.get("type") != 0:  # Only text blocks
                 continue
-            
+
             for line in block.get("lines", []):
                 # Combine all spans in a line into one text element
                 line_text = ""
                 first_span = None
-                
+
                 for span in line.get("spans", []):
                     span_text = span.get("text", "")
                     if not span_text.strip():
                         continue
-                    
+
                     if first_span is None:
                         first_span = span
                     line_text += span_text
-                
+
                 if not line_text.strip() or first_span is None:
                     continue
-                
+
+                # Get position from line bbox (top-down Y)
+                bbox = line.get("bbox", block.get("bbox", (0, 0, 0, 0)))
+                x = bbox[0]
+                y = bbox[1]  # Top-down Y (distance from page top)
+                x1 = bbox[2]  # right edge
+                y1 = bbox[3]  # bottom edge
+
+                # Filter out off-page text: skip if the text bbox is
+                # entirely outside the visible page rectangle
+                if x1 < 0 or x > page_w or y1 < 0 or y > page_h:
+                    logger.info(f"Filtered off-page text: '{line_text.strip()[:40]}' at ({x:.0f},{y:.0f})-({x1:.0f},{y1:.0f})")
+                    continue
+
                 # Extract styling from first span
                 font_name = first_span.get("font", "Helvetica")
                 font_size = first_span.get("size", 12.0)
-                
+
                 # Extract color (fitz stores as integer: 0=black, 16777215=white)
                 color_int = first_span.get("color", 0)
                 r = ((color_int >> 16) & 0xFF) / 255.0
                 g = ((color_int >> 8) & 0xFF) / 255.0
                 b = (color_int & 0xFF) / 255.0
                 text_color = (r, g, b)
-                
-                # Get position from line bbox (top-down Y)
-                bbox = line.get("bbox", block.get("bbox", (0, 0, 0, 0)))
-                x = bbox[0]
-                y = bbox[1]  # Top-down Y (distance from page top)
-                
+
+                # Filter out white/near-white text — invisible on white background
+                # and commonly used as a PDF obfuscation technique
+                if r > 0.9 and g > 0.9 and b > 0.9:
+                    logger.info(f"Filtered white text: '{line_text.strip()[:40]}' color=({r:.2f},{g:.2f},{b:.2f})")
+                    continue
+
                 text_elements.append(TextElement(
                     text=line_text.strip(),
                     x=float(x),
@@ -137,11 +158,11 @@ def _extract_text_with_fitz(fitz_page) -> List[TextElement]:
                     font_size=float(font_size),
                     color=text_color
                 ))
-        
-        logger.info(f"Extracted {len(text_elements)} text elements via fitz")
+
+        logger.info(f"Extracted {len(text_elements)} text elements via fitz (after filtering)")
     except Exception as e:
         logger.error(f"Failed to extract text with fitz: {e}", exc_info=True)
-    
+
     return text_elements
 
 
@@ -159,10 +180,7 @@ def extract_pdf_structure(pdf_path: str) -> List[PageStructure]:
     try:
         # Use fitz for text/graphics extraction (accurate positions)
         fitz_doc = fitz.open(pdf_path)
-        
-        # Also use pypdf for raw text (layout mode)
-        reader = PdfReader(pdf_path)
-        
+
         structures = []
         
         for page_num in range(len(fitz_doc)):
@@ -174,28 +192,22 @@ def extract_pdf_structure(pdf_path: str) -> List[PageStructure]:
             
             page_structure = PageStructure(page_num + 1, width, height)
             
-            # Extract raw text using pypdf layout mode (good for plain text)
-            try:
-                pypdf_page = reader.pages[page_num]
-                raw_text = pypdf_page.extract_text(
-                    extraction_mode="layout",
-                    layout_mode_space_vertically=False
-                )
-                page_structure.raw_text = raw_text
-            except Exception as e:
-                logger.warning(f"Layout extraction failed for page {page_num + 1}: {e}")
-                page_structure.raw_text = fitz_page.get_text()
-            
-            # Extract text elements with fitz (accurate Y positions, fonts, sizes)
+            # Extract text elements with fitz first (accurate Y positions, fonts, sizes)
+            # This also filters out off-page text
             try:
                 page_structure.text_elements = _extract_text_with_fitz(fitz_page)
                 print(f"[PDF_STRUCT] Page {page_num + 1}: Extracted {len(page_structure.text_elements)} text elements via fitz")
-                
+
                 for elem in page_structure.text_elements[:5]:
                     print(f"[PDF_STRUCT]   Text: '{elem.text[:40]}' font={elem.font_name} size={elem.font_size:.1f} y={elem.y:.1f} color={elem.color}")
             except Exception as e:
                 logger.error(f"Failed to extract text from page {page_num + 1}: {e}", exc_info=True)
-            
+
+            # Build raw_text from filtered fitz elements (sorted top-to-bottom)
+            # This ensures off-page text is excluded from raw_text too
+            sorted_elements = sorted(page_structure.text_elements, key=lambda e: (e.y, e.x))
+            page_structure.raw_text = "\n".join(el.text for el in sorted_elements)
+
             # Extract graphic elements using fitz get_drawings()
             try:
                 page_structure.graphic_elements = _extract_graphics_with_fitz(fitz_page, width, height)

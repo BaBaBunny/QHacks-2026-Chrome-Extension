@@ -1,6 +1,6 @@
 """
 PDF cleaning router.
-Handles PDF upload, structure extraction, AI-powered cleaning, and reconstruction.
+Handles PDF upload, structure extraction, and reconstruction with preserved layout.
 """
 import os
 import tempfile
@@ -10,7 +10,6 @@ from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 
 from ..services.pdf_structure import extract_pdf_structure
-from ..services.pdf_gemini import analyze_layout_with_metadata, clean_and_improve_text
 from ..services.pdf_rebuild import rebuild_pdf
 
 router = APIRouter()
@@ -21,6 +20,9 @@ logger = logging.getLogger(__name__)
 async def clean_pdf_endpoint(pdf: UploadFile = File(...)):
     """
     Clean a PDF while preserving its layout structure.
+    
+    Extracts text elements with exact positions via fitz, then rebuilds
+    the PDF by drawing each element at its original position.
     
     Args:
         pdf: Uploaded PDF file
@@ -40,7 +42,7 @@ async def clean_pdf_endpoint(pdf: UploadFile = File(...)):
         print(f"[PDF_CLEAN] Processing PDF: {pdf.filename}, size: {len(content)} bytes")
         logger.info(f"Processing PDF: {pdf.filename}, size: {len(content)} bytes")
         
-        # Step 1: Extract structure
+        # Step 1: Extract structure (text elements with positions, fonts, colors)
         print("[PDF_CLEAN] Extracting PDF structure...")
         structures = extract_pdf_structure(temp_input_path)
         page_count = len(structures)
@@ -50,39 +52,18 @@ async def clean_pdf_endpoint(pdf: UploadFile = File(...)):
         if page_count == 0:
             raise HTTPException(status_code=400, detail="No pages found in PDF")
         
-        # Step 2: Analyze layout with metadata and clean text with Gemini
-        logger.info("Analyzing layout with metadata and cleaning text...")
-        cleaned_pages = []
+        # Collect raw text for the response
         all_text = []
-        gemini_analyses = []
-        
         for i, structure in enumerate(structures):
-            print(f"[PDF_CLEAN] Processing page {i + 1}/{page_count}")
-            print(f"[PDF_CLEAN] Page has {len(structure.text_elements)} text elements, {len(structure.graphic_elements)} graphic elements")
-            
-            # Analyze layout using actual font/position metadata
-            layout_analysis = analyze_layout_with_metadata(structure)
-            gemini_analyses.append(layout_analysis)
-            
-            print(f"[PDF_CLEAN] Found {len(layout_analysis.get('header_mappings', []))} header mappings")
-            
-            # Clean the text
-            cleaned_text = clean_and_improve_text(
-                structure.raw_text,
-                context="body"
-            )
-            
-            cleaned_pages.append(cleaned_text)
-            all_text.append(cleaned_text)
-            
-            logger.info(f"Page {i + 1}: cleaned {len(structure.raw_text)} -> {len(cleaned_text)} chars")
+            print(f"[PDF_CLEAN] Page {i + 1}/{page_count}: {len(structure.text_elements)} text elements")
+            all_text.append(structure.raw_text)
         
-        # Step 3: Rebuild PDF with cleaned content and metadata
-        logger.info("Rebuilding PDF with metadata-based layout...")
-        pdf_bytes = rebuild_pdf(structures, cleaned_pages, gemini_analyses)
+        # Step 2: Rebuild PDF by drawing each element at its exact original position
+        logger.info("Rebuilding PDF with element-based layout...")
+        pdf_bytes = rebuild_pdf(structures)
         logger.info(f"Rebuilt PDF: {len(pdf_bytes)} bytes")
         
-        # Step 4: Encode and return
+        # Step 3: Encode and return
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
         extracted_text = "\n\n--- Page Break ---\n\n".join(all_text)
         

@@ -259,21 +259,19 @@ def clean_and_improve_text(text: str, context: str = "body") -> str:
         
         model = genai.GenerativeModel(MODEL_NAME)
         
-        prompt = f"""Clean and improve this text extracted from a scanned PDF. This text is from the {context} section.
+        prompt = f"""You are a text cleaner. Your job is to fix OCR errors while preserving ALL original text.
 
-Original text:
+INPUT TEXT:
 {text}
 
-Instructions:
-1. Fix OCR errors and typos
-2. Remove garbled characters and artifacts (like weird symbols: ▪, ●, ◆, etc.)
-3. Preserve the original meaning and structure
-4. Keep paragraph breaks and formatting
-5. Remove any overlapping or duplicate text
-6. Do NOT add any commentary or explanations
-7. Return ONLY the cleaned text
+INSTRUCTIONS:
+- Fix spelling/OCR errors only
+- Remove duplicate lines if they appear twice in a row
+- Keep ALL lines including titles, headers, body text, and footers
+- Preserve paragraph breaks
+- Output ONLY the cleaned text - no explanations, no labels, no commentary
 
-Cleaned text:"""
+OUTPUT (cleaned text only):"""
 
         response = model.generate_content(prompt)
         cleaned = response.text.strip()
