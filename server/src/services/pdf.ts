@@ -1,6 +1,12 @@
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import { existsSync } from "fs";
 import fs from "fs/promises";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 interface CleanResult {
   pdfBuffer: Buffer;
@@ -41,7 +47,20 @@ export async function cleanPdf(pdfPath: string): Promise<CleanResult> {
 
   // Stage 2: Create a clean, searchable PDF from the extracted text
   const newPdf = await PDFDocument.create();
-  const font = await newPdf.embedFont(StandardFonts.Helvetica);
+  newPdf.registerFontkit(fontkit);
+
+  const fontPath = resolve(
+    __dirname,
+    "../../assets/fonts/Noto Sans Regular.ttf",
+  );
+  let font;
+  if (existsSync(fontPath)) {
+    font = await newPdf.embedFont(await fs.readFile(fontPath), { subset: true });
+    console.log(`[PDF] Using Unicode font: ${fontPath}`);
+  } else {
+    font = await newPdf.embedFont(StandardFonts.Helvetica);
+    console.warn(`[PDF] Unicode font not found, falling back to Helvetica`);
+  }
   const fontSize = 11;
   const margin = 50;
   const lineHeight = fontSize * 1.4;
@@ -116,7 +135,7 @@ function wrapText(
   fontSize: number,
   maxWidth: number,
 ): string[] {
-  const paragraphs = text.split("\n");
+  const paragraphs = sanitizeForFont(text, font).split("\n");
   const allLines: string[] = [];
 
   for (const para of paragraphs) {
@@ -144,4 +163,24 @@ function wrapText(
   }
 
   return allLines;
+}
+
+function sanitizeForFont(text: string, font: any): string {
+  let result = "";
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    // Skip null and combining diacritical marks (U+0300-U+036F)
+    // These include strikethrough, underline, overlay marks that don't render in PDFs
+    if (char === "\u0000" || (code >= 0x0300 && code <= 0x036F)) {
+      continue;
+    }
+    try {
+      font.encodeText(char);
+      result += char;
+    } catch {
+      result += "?";
+    }
+  }
+
+  return result;
 }
